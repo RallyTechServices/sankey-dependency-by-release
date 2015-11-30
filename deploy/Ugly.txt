@@ -3,10 +3,10 @@
 <head>
     <title>Sankey Dependency by Release</title>
     <!--  (c) 2015 Rally Software Development Corp.  All Rights Reserved. -->
-    <!--  Build Date: Fri Nov 20 2015 18:56:25 GMT-0700 (MST) -->
+    <!--  Build Date: Mon Nov 30 2015 13:29:31 GMT-0700 (MST) -->
     
     <script type="text/javascript">
-        var APP_BUILD_DATE = "Fri Nov 20 2015 18:56:25 GMT-0700 (MST)";
+        var APP_BUILD_DATE = "Mon Nov 30 2015 13:29:31 GMT-0700 (MST)";
         var CHECKSUM = [%= checksum %];
     </script>
     

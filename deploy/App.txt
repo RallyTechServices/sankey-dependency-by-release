@@ -3,11 +3,11 @@
 <head>
     <title>Sankey Dependency by Release</title>
     <!--  (c) 2015 Rally Software Development Corp.  All Rights Reserved. -->
-    <!--  Build Date: Fri Nov 20 2015 18:56:23 GMT-0700 (MST) -->
+    <!--  Build Date: Mon Nov 30 2015 13:29:29 GMT-0700 (MST) -->
     
     <script type="text/javascript">
-        var APP_BUILD_DATE = "Fri Nov 20 2015 18:56:23 GMT-0700 (MST)";
-        var CHECKSUM = 2916247550626;
+        var APP_BUILD_DATE = "Mon Nov 30 2015 13:29:29 GMT-0700 (MST)";
+        var CHECKSUM = 2910749857951;
     </script>
     
     <script type="text/javascript" src="/apps/2.0/sdk.js"></script>
@@ -9766,15 +9766,21 @@ Ext.define("sankey-dependency-by-release", {
     componentCls: 'app',
     logger: new Rally.technicalservices.Logger(),
     fetch: ['Name', 'PlanEstimate', 'Predecessors', 'Successors', 'Blocked', 'BlockedReason', 'ScheduleState', 'DisplayColor'],
-    useLookback: false,
+    notInDatasetColor: '#000000',
+    autoScroll: false,
+    margin: 25,
 
     launch: function() {
         if (this.getContext().getTimeboxScope() && this.getContext().getTimeboxScope().type === 'release'){
-            this._update(this.getContext().getTimeboxScope());
+            this.logger.log('launch timeboxScope', this.getContext().getTimeboxScope());
+            this._update((this.getContext().getTimeboxScope() && this.getContext().getTimeboxScope().getRecord()) || null);
         } else {
             this.add({
                 xtype: 'rallyreleasecombobox',
                 allowNoEntry: true,
+                storeConfig: {
+                    limit: 'Infinity'
+                },
                 listeners: {
                     scope: this,
                     change: function(cb, newValue, oldValue){
@@ -9796,24 +9802,26 @@ Ext.define("sankey-dependency-by-release", {
         this.noPred = 0;
         this.noSuc = 0;
 
-        if (this.useLookback) {
-            this.loadDataLB();
-        } else {
-            this.loadDataWS(timebox);
-        }
+        this.loadDataWS(timebox);
     },
     onTimeboxScopeChange: function(timebox){
-        this.logger.log('onTimeboxScopeChange', timebox.getQueryFilter().toString());
+        this.logger.log('onTimeboxScopeChange', timebox && timebox.getQueryFilter().toString());
         this.getContext().setTimeboxScope(timebox);
-        this._update(timebox);
+        this._update(timebox.getRecord());
     },
-    _makeDataObj: function (rec) {
+    _makeDataObj: function (rec, notInDataset) {
+
+        var displayColor = rec.get('DisplayColor') || '#00A9E0';
+        if (notInDataset){
+            displayColor = this.notInDatasetColor;
+        }
+
         return {
             oid: rec.get('ObjectID'),
             name: rec.get('Name'),
             size: rec.get('PlanEstimate'),
             blocked: rec.get('Blocked'),
-            displayColor: rec.get('DisplayColor') || '#00A9E0',
+            displayColor: displayColor,
             ref: '/hierarchicalrequirement/' + rec.get('ObjectID')
         };
     },
@@ -9852,93 +9860,72 @@ Ext.define("sankey-dependency-by-release", {
             callback: function (records, options, success) {
                 this.logger.log('loadDataWS', records);
 
-                var recs = _(records)
-                    .filter(function (rec) { return rec.data.Predecessors.Count + rec.data.Successors.Count; }, this)
-                    .map(function (rec) {
-                        var ret = [];
-                        var s = rec.get('ObjectID');
+                var filteredRecords = _.filter(records, function(r){
+                    return r.data.Predecessors.Count + r.data.Successors.Count;
+                });
 
-                        if (rec.data.Successors.Count) {
-                            ret.push(rec.getCollection('Successors').load({fetch: me.fetch}).then(function (succs) {
-                                _.each(succs, function (t) { me.links.push({source: s, target: t.get('ObjectID'), link: 1}); });
-                                return true;
-                            }));
-                        }
+                var predecessorsNotInDataset = [],
+                    dataSetOids = _.map(records, function(r){ return r.get('ObjectID')});
 
-                        return ret;
-                    }, this)
-                    .flatten()
-                    .value();
+                var promises = _.map(filteredRecords, function(fr){
+                    var ret = [];
+                    var t = fr.get('ObjectID');
 
-                this.logger.log('processed records', recs);
+                    if (fr.data.Predecessors.Count) {
+                        ret.push(fr.getCollection('Predecessors').load({fetch: me.fetch}).then(function (preds) {
 
-                Deft.Promise.all(recs).then(function () {
-                    _(records)
-                        .filter(function (rec) { return rec.data.Predecessors.Count + rec.data.Successors.Count; })
-                        .each(function (rec) {
-                            this.nodes.push(this._makeDataObj(rec));
-                            this.oidMap[rec.get('ObjectID')] = this.nodes.length - 1;
+                            _.each(preds, function (s) {
+                                if (!Ext.Array.contains(dataSetOids, s.get('ObjectID'))){
+                                    predecessorsNotInDataset.push(s);
+                                }
+                                me.links.push({source: s.get('ObjectID'), target: t, link: 1});
+
+                            });
+                            return true;
+                        }));
+                    }
+
+                    return ret;
+                }, this);
+
+                promises =_.flatten(promises);
+
+                this.logger.log('processed records', promises);
+
+                if (promises.length > 0){
+                    Deft.Promise.all(promises).then(function(){
+                        _.each(filteredRecords, function(fr){
+                            this.nodes.push(this._makeDataObj(fr));
+                            this.oidMap[fr.get('ObjectID')] = this.nodes.length - 1;
                         }, me);
 
-                    me.logger.log('oidMap', me.oidMap);
+                        _.each(predecessorsNotInDataset, function(p){
+                            this.nodes.push(this._makeDataObj(p, true));
+                            this.oidMap[p.get('ObjectID')] = this.nodes.length -1;
+                        }, me);
 
-                    me.links = _(me.links)
-                        .map(function (l) { return { source: me.oidMap[l.source], target: me.oidMap[l.target], value: 1 }; })
-                        .filter(function (l) { return _.isNumber(l.source) && _.isNumber(l.target); })
-                        .value();
+                        me.logger.log('oidMap', me.oidMap);
 
-                    me.logger.log('links', me.links);
-                    me.render();
-                });
-            }
-        });
-    },
+                        me.links = _.map(me.links, function(l){
+                            return { source: me.oidMap[l.source], target: me.oidMap[l.target], value: 1 };
+                        });
 
-    loadDataLB: function () {
-        var sss = Ext.create('Rally.data.lookback.SnapshotStore', {
-            autoLoad: false,
-            context: {
-                workspace: this.getContext().getWorkspaceRef()
-            },
-            fetch: this.fetch,
-            hydrate: ['ScheduleState'],
-            find: {
-                _TypeHierarchy: 'HierarchicalRequirement',
-                _ProjectHierarchy: { $in: [this.getContext().getProject().ObjectID] },
-                __At: 'current',
-                $or: [
-                    { Successors: { $ne: null } },
-                    { Predecessors: { $ne: null } }
-                ]
-            }
-        });
+                        me.links = _.filter(me.links, function(l){
+                            return _.isNumber(l.source) && _.isNumber(l.target);
+                        });
 
-        sss.load({
-            scope: this,
-            callback: function (records, options, success) {
-                var source, target;
+                        me.logger.log('links', me.links);
+                        me.render();
 
-                _.each(records, function (rec) {
-                    this.nodes.push(this._makeDataObj(rec));
+                    });
+                } else {
+                    this.add({
+                        xtype: 'container',
+                        itemId: 'sankey-container',
+                        html: 'No predecessor or successor data for the selected Release'
+                    });
+                }
 
-                    this.oidMap[rec.get('ObjectID')] = this.nodes.length - 1;
-                    if (rec.get('Predecessors').length === 0) { this.noPred++; }
-                    if (rec.get('Successors').length === 0) { this.noSuc++; }
-                }, this);
-
-                _.each(records, function (rec) {
-                    source = this.oidMap[rec.get('ObjectID')];
-
-                    _.each(rec.get('Successors'), function (suc) {
-                        target = this.oidMap[suc];
-
-                        if (_.isNumber(source) && _.isNumber(target)) {
-                            this.links.push({source: source, target: target, value: 1});
-                        }
-                    }, this);
-                }, this);
-
-                this.render();
             }
         });
     },
@@ -9958,8 +9945,8 @@ Ext.define("sankey-dependency-by-release", {
         var formatNumber = d3.format(",.0f"),
             format = function(d) { return formatNumber(d) + " SP"; },
             color = function (c) { return c; };
-        this.logger.log('formatNumber', formatNumber);
 
+        this.logger.log('formatNumber', formatNumber);
         var test = this.add({
             xtype: 'container',
             itemId: 'sankey-container'
